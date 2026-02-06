@@ -813,31 +813,33 @@ type = tcp
 
 4. **Forgetting defaultGroup in _TCP_ROUTING FORMAT**: Setting `FORMAT = custom_group` removes the event from the default forwarding path. To send to both, include it explicitly: `FORMAT = custom_group, default_group`.
 
-5. **`enableOldS2SProtocol = true` bypasses features**: This deprecated setting forces the legacy Splunk-to-Splunk protocol, which can bypass `forwardedindex` filtering and other modern forwarding features. Remove it unless there is a specific, documented compatibility requirement.
+5. **`enableOldS2SProtocol = true` is deprecated**: Introduced in Splunk 9.1 to allow fallback to the oldest S2S protocol (level 0). It does NOT bypass `forwardedindex` filters (those operate independently), but it adds unnecessary network overhead and should be removed unless required for compatibility with very old receivers or third-party tools (e.g., Cribl with Max S2S version set to v3).
 
 6. **`indexAndForward` in the wrong stanza**: `indexAndForward = 1` in `[tcpout]` is non-standard. Use the dedicated `[indexAndForward]` stanza with `index = true` for correct behavior.
 
 7. **Mismatched allowlists between transforms and forwardedindex**: When using both `_TCP_ROUTING` transforms and `forwardedindex` filters, ensure the index lists match. A mismatch means some data gets routed by transforms but blocked by `forwardedindex` (or vice versa), leading to silent data loss or unexpected forwarding.
 
+8. **`forwardedindex` filters in the wrong stanza**: `forwardedindex` settings ONLY work under the global `[tcpout]` stanza. Placing them under `[tcpout:<group>]` silently fails — the filters are ignored and all data is forwarded. This is one of the most common `forwardedindex` misconfigurations.
+
 8. **Using _TCP_ROUTING on indexers that aren't forwarding**: `_TCP_ROUTING` only affects forwarding to output groups. On indexers, use `_MetaData:Index` to control which index data lands in.
 
 ### Parsing & Extraction
 
-9. **Configuring transforms.conf on a Universal Forwarder**: UFs cannot run TRANSFORMS-. Use a Heavy Forwarder.
+10. **Configuring transforms.conf on a Universal Forwarder**: UFs cannot run TRANSFORMS-. Use a Heavy Forwarder.
 
-10. **TRANSFORMS- class name ordering**: They execute in ASCII sort order of the class name, not file order. Name them carefully (e.g., `a_filter`, `b_route`).
+11. **TRANSFORMS- class name ordering**: They execute in ASCII sort order of the class name, not file order. Name them carefully (e.g., `a_filter`, `b_route`).
 
-11. **Not creating the target index**: Routing to an index that doesn't exist in `indexes.conf` sends events to the `default` index silently.
+12. **Not creating the target index**: Routing to an index that doesn't exist in `indexes.conf` sends events to the `default` index silently.
 
-12. **LINE_BREAKER without capturing group**: `LINE_BREAKER = [\r\n]+` fails. Must be `LINE_BREAKER = ([\r\n]+)`.
+13. **LINE_BREAKER without capturing group**: `LINE_BREAKER = [\r\n]+` fails. Must be `LINE_BREAKER = ([\r\n]+)`.
 
-13. **Using BREAK_ONLY_BEFORE with BREAK_ONLY_BEFORE_DATE=true**: Set `BREAK_ONLY_BEFORE_DATE = false` when using `BREAK_ONLY_BEFORE` to avoid interference.
+14. **Using BREAK_ONLY_BEFORE with BREAK_ONLY_BEFORE_DATE=true**: Set `BREAK_ONLY_BEFORE_DATE = false` when using `BREAK_ONLY_BEFORE` to avoid interference.
 
-14. **Placing search-time configs on forwarders**: `EXTRACT-`, `FIELDALIAS-`, `EVAL-`, `LOOKUP-` only work on search heads.
+15. **Placing search-time configs on forwarders**: `EXTRACT-`, `FIELDALIAS-`, `EVAL-`, `LOOKUP-` only work on search heads.
 
-15. **Overlarge TRUNCATE=0**: Disabling truncation can cause memory issues with large events. Set an appropriate limit.
+16. **Overlarge TRUNCATE=0**: Disabling truncation can cause memory issues with large events. Set an appropriate limit.
 
-16. **SEDCMD vs TRANSFORMS for masking**: `SEDCMD` is simpler `s/find/replace/g` (no capture groups in format). TRANSFORMS with `DEST_KEY=_raw` supports full regex capture groups.
+17. **SEDCMD vs TRANSFORMS for masking**: `SEDCMD` is simpler `s/find/replace/g` (no capture groups in format). TRANSFORMS with `DEST_KEY=_raw` supports full regex capture groups.
 
 ---
 
@@ -891,7 +893,7 @@ When asked to review, audit, or provide a synopsis of Splunk configurations, **d
 
 4. **Check for transforms that won't fire.** If the config is on an indexer receiving cooked data, `TRANSFORMS-` directives won't execute. If routing depends on transforms, flag that they are inert.
 
-5. **Check for deprecated settings.** Flag `enableOldS2SProtocol`, `whitelist`/`blacklist` (vs `allowlist`/`denylist`), `indexAndForward` in `[tcpout]` instead of `[indexAndForward]` stanza.
+5. **Check for deprecated settings.** Flag `enableOldS2SProtocol` (unnecessary unless connecting to very old receivers), `whitelist`/`blacklist` (vs `allowlist`/`denylist`), `indexAndForward` in `[tcpout]` instead of `[indexAndForward]` stanza.
 
 6. **Cross-reference allowlists.** If both `transforms.conf` routing and `forwardedindex` filters are used, verify the index/sourcetype lists match. Flag mismatches.
 
