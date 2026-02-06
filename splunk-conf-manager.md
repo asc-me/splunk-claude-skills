@@ -803,25 +803,41 @@ type = tcp
 
 ## COMMON MISTAKES
 
-1. **Configuring transforms.conf on a Universal Forwarder**: UFs cannot run TRANSFORMS-. Use a Heavy Forwarder.
+### Routing & Forwarding
 
-2. **Forgetting defaultGroup in _TCP_ROUTING**: Setting `FORMAT = custom_group` removes the event from the default group. Include it explicitly: `FORMAT = custom_group, default_group`.
+1. **`defaultGroup` overriding selective routing**: Setting `defaultGroup = <group>` forwards ALL data to that group regardless of `_TCP_ROUTING` or `forwardedindex` filters. If your intent is selective forwarding, either remove `defaultGroup` entirely (rely on `_TCP_ROUTING`) or ensure `forwardedindex` filters are working and not bypassed by deprecated settings.
 
-3. **TRANSFORMS- class name ordering**: They execute in ASCII sort order of the class name, not file order. Name them carefully (e.g., `a_first`, `b_second`).
+2. **TRANSFORMS- on indexers receiving cooked data**: Indexers receiving pre-parsed (cooked) data from forwarders do NOT re-run the parsing pipeline. `TRANSFORMS-` directives in `props.conf` will not fire. Use `forwardedindex` filters in `outputs.conf` for index-level forwarding control on indexers, or move transform-based routing to an upstream Heavy Forwarder.
 
-4. **Not creating the target index**: Routing to an index that doesn't exist in `indexes.conf` sends events to `default` index.
+3. **`nullQueue` drops from the ENTIRE pipeline, not just forwarding**: `DEST_KEY = queue` / `FORMAT = nullQueue` removes events from all processing — the event will not be indexed OR forwarded. If your intent is to prevent forwarding while still indexing locally, do NOT use `nullQueue`. Instead, control forwarding via `_TCP_ROUTING` (events without it simply aren't forwarded) or `forwardedindex` filters.
 
-5. **LINE_BREAKER without capturing group**: `LINE_BREAKER = [\r\n]+` fails. Must be `LINE_BREAKER = ([\r\n]+)`.
+4. **Forgetting defaultGroup in _TCP_ROUTING FORMAT**: Setting `FORMAT = custom_group` removes the event from the default forwarding path. To send to both, include it explicitly: `FORMAT = custom_group, default_group`.
 
-6. **Using BREAK_ONLY_BEFORE with BREAK_ONLY_BEFORE_DATE=true**: Set `BREAK_ONLY_BEFORE_DATE = false` when using `BREAK_ONLY_BEFORE` to avoid interference.
+5. **`enableOldS2SProtocol = true` bypasses features**: This deprecated setting forces the legacy Splunk-to-Splunk protocol, which can bypass `forwardedindex` filtering and other modern forwarding features. Remove it unless there is a specific, documented compatibility requirement.
 
-7. **Using _TCP_ROUTING on indexers**: Only makes sense on forwarders. On indexers, use `_MetaData:Index`.
+6. **`indexAndForward` in the wrong stanza**: `indexAndForward = 1` in `[tcpout]` is non-standard. Use the dedicated `[indexAndForward]` stanza with `index = true` for correct behavior.
 
-8. **Placing search-time configs on forwarders**: `EXTRACT-`, `FIELDALIAS-`, `EVAL-`, `LOOKUP-` only work on search heads.
+7. **Mismatched allowlists between transforms and forwardedindex**: When using both `_TCP_ROUTING` transforms and `forwardedindex` filters, ensure the index lists match. A mismatch means some data gets routed by transforms but blocked by `forwardedindex` (or vice versa), leading to silent data loss or unexpected forwarding.
 
-9. **Overlarge TRUNCATE=0**: Disabling truncation can cause memory issues with large events. Set an appropriate limit.
+8. **Using _TCP_ROUTING on indexers that aren't forwarding**: `_TCP_ROUTING` only affects forwarding to output groups. On indexers, use `_MetaData:Index` to control which index data lands in.
 
-10. **SEDCMD vs TRANSFORMS for masking**: `SEDCMD` is simpler `s/find/replace/g` (no capture groups in format). TRANSFORMS with `DEST_KEY=_raw` supports full regex capture groups.
+### Parsing & Extraction
+
+9. **Configuring transforms.conf on a Universal Forwarder**: UFs cannot run TRANSFORMS-. Use a Heavy Forwarder.
+
+10. **TRANSFORMS- class name ordering**: They execute in ASCII sort order of the class name, not file order. Name them carefully (e.g., `a_filter`, `b_route`).
+
+11. **Not creating the target index**: Routing to an index that doesn't exist in `indexes.conf` sends events to the `default` index silently.
+
+12. **LINE_BREAKER without capturing group**: `LINE_BREAKER = [\r\n]+` fails. Must be `LINE_BREAKER = ([\r\n]+)`.
+
+13. **Using BREAK_ONLY_BEFORE with BREAK_ONLY_BEFORE_DATE=true**: Set `BREAK_ONLY_BEFORE_DATE = false` when using `BREAK_ONLY_BEFORE` to avoid interference.
+
+14. **Placing search-time configs on forwarders**: `EXTRACT-`, `FIELDALIAS-`, `EVAL-`, `LOOKUP-` only work on search heads.
+
+15. **Overlarge TRUNCATE=0**: Disabling truncation can cause memory issues with large events. Set an appropriate limit.
+
+16. **SEDCMD vs TRANSFORMS for masking**: `SEDCMD` is simpler `s/find/replace/g` (no capture groups in format). TRANSFORMS with `DEST_KEY=_raw` supports full regex capture groups.
 
 ---
 
@@ -855,6 +871,45 @@ index=_internal sourcetype=splunkd component=TcpOutputProc
 index=_internal sourcetype=splunkd "routing" OR "transform"
 index=_internal source=*metrics.log group=per_sourcetype_thruput
 ```
+
+---
+
+## GUIDELINES FOR REVIEWING CONFIGURATIONS
+
+When asked to review, audit, or provide a synopsis of Splunk configurations, **do not just describe what each file does — diagnose problems and flag issues proactively.** Every review must answer: "Will this config actually work as intended?"
+
+### Review checklist
+
+1. **Identify the deployment target.** Is this running on a UF, Heavy Forwarder, or Indexer? This determines which configs will actually execute:
+   - UF: only `inputs.conf`, `outputs.conf`, and limited `props.conf` (line breaking only)
+   - HF: all configs
+   - Indexer: `TRANSFORMS-` only fires on raw/unparsed data, NOT on cooked data from forwarders
+
+2. **Check for `defaultGroup` conflicts.** If `defaultGroup` is set in `[tcpout]`, ALL data goes to that group by default. If the intent is selective forwarding (via `_TCP_ROUTING` or `forwardedindex`), flag that `defaultGroup` will override the selectivity.
+
+3. **Check for `nullQueue` misuse.** `nullQueue` drops events from the entire pipeline (no indexing, no forwarding). If the intent is "don't forward but still index," `nullQueue` is wrong. Flag it.
+
+4. **Check for transforms that won't fire.** If the config is on an indexer receiving cooked data, `TRANSFORMS-` directives won't execute. If routing depends on transforms, flag that they are inert.
+
+5. **Check for deprecated settings.** Flag `enableOldS2SProtocol`, `whitelist`/`blacklist` (vs `allowlist`/`denylist`), `indexAndForward` in `[tcpout]` instead of `[indexAndForward]` stanza.
+
+6. **Cross-reference allowlists.** If both `transforms.conf` routing and `forwardedindex` filters are used, verify the index/sourcetype lists match. Flag mismatches.
+
+7. **Check TRANSFORMS- execution order.** Multiple `TRANSFORMS-<class>` directives run in ASCII sort order of the class name. Verify the order is correct for the intended logic (especially filter-then-route patterns).
+
+8. **Verify target indexes exist.** If routing to specific indexes, note that those indexes must exist in `indexes.conf` on the indexers.
+
+9. **Check for redundant or conflicting filtering.** Multiple layers of filtering (transforms + forwardedindex + nullQueue) can conflict or create unexpected behavior. Flag redundancy and identify which layer is actually effective.
+
+10. **Assess data loss risk.** Any config that drops data (`nullQueue`, `forwardedindex` blacklists, missing `defaultGroup` in `_TCP_ROUTING` FORMAT) should be explicitly called out with the impact.
+
+### Review output format
+
+When presenting a review:
+- Lead with **issues and risks** (not just descriptions)
+- For each issue, explain **why** it's a problem and **what will happen** in practice
+- Distinguish between **critical** (config won't work / data loss) and **advisory** (suboptimal but functional)
+- End with a recommended fix or corrected config
 
 ---
 
